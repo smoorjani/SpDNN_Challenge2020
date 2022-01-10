@@ -2,6 +2,8 @@
 #include "cuda_runtime.hpp"
 
 #include <cuda.h>
+#define WARPSIZE 32
+#define MINIBATCH 12
 
 extern int neuron;
 extern int layer;
@@ -10,11 +12,11 @@ extern int input;
 extern float bias;
 
 extern int **csrdispl;
-extern INDPREC **csrindex;
-extern VALPREC **csrvalue;
+extern unsigned short **csrindex;
+extern float **csrvalue;
 
-extern FEATPREC *currfeat;
-extern FEATPREC *nextfeat;
+extern float *currfeat;
+extern float *nextfeat;
 extern int *active;
 extern int *categories;
 extern int *globalcategories;
@@ -32,38 +34,38 @@ extern Duration timekernel;
 extern Duration timecopy;
 
 int **csrdispl_d;
-INDPREC **csrindex_d;
-VALPREC **csrvalue_d;
+unsigned short **csrindex_d;
+float **csrvalue_d;
 
 int **buffdispl;
 int **mapdispl;
 int **warpdispl;
-MAPPREC **map;
-INDPREC **warpindex;
-VALPREC **warpvalue;
+unsigned short **map;
+unsigned short **warpindex;
+float **warpvalue;
 
 int **buffdispl_d;
 int **mapdispl_d;
 int **warpdispl_d;
-MAPPREC *mapbuff_d;
-INDPREC *indbuff_d;
-VALPREC *valbuff_d;;
+unsigned short *mapbuff_d;
+unsigned short *indbuff_d;
+float *valbuff_d;;
 #ifdef OUTOFCORE
 int  weightsizemax;
 int  mapsizemax;
 #ifdef OVERLAP
-MAPPREC *mapstream_d;
-INDPREC *indstream_d;
-VALPREC *valstream_d;
+unsigned short *mapstream_d;
+unsigned short *indstream_d;
+float *valstream_d;
 #endif
 #else
-MAPPREC **map_d;
-INDPREC **warpindex_d;
-VALPREC **warpvalue_d;
+unsigned short **map_d;
+unsigned short **warpindex_d;
+float **warpvalue_d;
 #endif
 
-FEATPREC *currfeat_d;
-FEATPREC *nextfeat_d;
+float *currfeat_d;
+float *nextfeat_d;
 int *active_d;
 int *categories_d;
 
@@ -83,7 +85,7 @@ __device__ float __ReLU(float x){
    return x<0.0?0.0:x>32.0?32.0:x;
 };
 
-__global__ void __launch_bounds__(1024,1) dummy_kernel(FEATPREC *nextfeat, FEATPREC *currfeat, int buffsize, int *buffdispl, int *mapdispl, MAPPREC *map, int *displ, INDPREC *index, VALPREC *value, float bias , int neuron, int *categories, int *active){
+__global__ void __launch_bounds__(1024,1) dummy_kernel(float *nextfeat, float *currfeat, int buffsize, int *buffdispl, int *mapdispl, unsigned short *map, int *displ, unsigned short *index, float *value, float bias , int neuron, int *categories, int *active){
   extern __shared__ float shared[];
   int wind = threadIdx.x%WARPSIZE;
   float reduce[MINIBATCH] = {0.0};
@@ -200,9 +202,9 @@ void setup_gpu(){
   weightsizemax = 0;
   mapsizemax = 0;
   #else
-  map_d = new MAPPREC*[layer];
-  warpindex_d = new INDPREC*[layer];
-  warpvalue_d = new VALPREC*[layer];
+  map_d = new unsigned short*[layer];
+  warpindex_d = new unsigned short*[layer];
+  warpvalue_d = new float*[layer];
   #endif
   for(int l = 0; l < layer; l++){
     OR_FATAL(cudaMalloc((void**)&buffdispl_d[l],sizeof(int)*(numblocks+1)));
@@ -222,45 +224,45 @@ void setup_gpu(){
     if(weightsize > weightsizemax)
       weightsizemax = weightsize; 
     #else
-    OR_FATAL(cudaMalloc((void**)&map_d[l],sizeof(MAPPREC)*(mapdispl[l][buffdispl[l][numblocks]])));
-    OR_FATAL(cudaMalloc((void**)&warpindex_d[l],sizeof(INDPREC)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
-    OR_FATAL(cudaMalloc((void**)&warpvalue_d[l],sizeof(VALPREC)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
-    memmap += sizeof(MAPPREC)*(mapdispl[l][buffdispl[l][numblocks]])/1.0e9;
-    memweight += sizeof(INDPREC)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE/1.0e9;
-    memweight += sizeof(VALPREC)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE/1.0e9;
-    OR_FATAL(cudaMemcpy(map_d[l],map[l],sizeof(MAPPREC)*(mapdispl[l][buffdispl[l][numblocks]]),cudaMemcpyHostToDevice));
-    OR_FATAL(cudaMemcpy(warpindex_d[l],warpindex[l],sizeof(INDPREC)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
-    OR_FATAL(cudaMemcpy(warpvalue_d[l],warpvalue[l],sizeof(VALPREC)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
+    OR_FATAL(cudaMalloc((void**)&map_d[l],sizeof(unsigned short)*(mapdispl[l][buffdispl[l][numblocks]])));
+    OR_FATAL(cudaMalloc((void**)&warpindex_d[l],sizeof(unsigned short)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
+    OR_FATAL(cudaMalloc((void**)&warpvalue_d[l],sizeof(float)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
+    memmap += sizeof(unsigned short)*(mapdispl[l][buffdispl[l][numblocks]])/1.0e9;
+    memweight += sizeof(unsigned short)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE/1.0e9;
+    memweight += sizeof(float)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE/1.0e9;
+    OR_FATAL(cudaMemcpy(map_d[l],map[l],sizeof(unsigned short)*(mapdispl[l][buffdispl[l][numblocks]]),cudaMemcpyHostToDevice));
+    OR_FATAL(cudaMemcpy(warpindex_d[l],warpindex[l],sizeof(unsigned short)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
+    OR_FATAL(cudaMemcpy(warpvalue_d[l],warpvalue[l],sizeof(float)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
     #endif
   }
   #ifdef OUTOFCORE
   if(myid==0)printf("\n");
-  if(myid==0)printf("mapsizemax: %d (%f KB)\n",mapsizemax,sizeof(MAPPREC)*mapsizemax/1.0e6);
-  if(myid==0)printf("weightsizemax: %d (%f KB)\n",weightsizemax,(sizeof(INDPREC)+sizeof(VALPREC))*weightsizemax/1.0e6);
+  if(myid==0)printf("mapsizemax: %d (%f KB)\n",mapsizemax,sizeof(unsigned short)*mapsizemax/1.0e6);
+  if(myid==0)printf("weightsizemax: %d (%f KB)\n",weightsizemax,(sizeof(unsigned short)+sizeof(float))*weightsizemax/1.0e6);
   #ifdef OVERLAP
-  OR_FATAL(cudaMalloc((void**)&mapstream_d,sizeof(MAPPREC)*mapsizemax*2));
-  OR_FATAL(cudaMalloc((void**)&indstream_d,sizeof(INDPREC)*weightsizemax*2));
-  OR_FATAL(cudaMalloc((void**)&valstream_d,sizeof(VALPREC)*weightsizemax*2));
-  memmap += 2*sizeof(MAPPREC)*mapsizemax/1.0e9;
-  memweight += 2*sizeof(INDPREC)*weightsizemax/1.0e9;
-  memweight += 2*sizeof(VALPREC)*weightsizemax/1.0e9;
-  OR_FATAL(cudaMemcpy(mapstream_d,map[0],sizeof(MAPPREC)*mapdispl[0][buffdispl[0][numblocks]],cudaMemcpyHostToDevice));
-  OR_FATAL(cudaMemcpy(indstream_d,warpindex[0],sizeof(INDPREC)*warpdispl[0][buffdispl[0][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
-  OR_FATAL(cudaMemcpy(valstream_d,warpvalue[0],sizeof(VALPREC)*warpdispl[0][buffdispl[0][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
+  OR_FATAL(cudaMalloc((void**)&mapstream_d,sizeof(unsigned short)*mapsizemax*2));
+  OR_FATAL(cudaMalloc((void**)&indstream_d,sizeof(unsigned short)*weightsizemax*2));
+  OR_FATAL(cudaMalloc((void**)&valstream_d,sizeof(float)*weightsizemax*2));
+  memmap += 2*sizeof(unsigned short)*mapsizemax/1.0e9;
+  memweight += 2*sizeof(unsigned short)*weightsizemax/1.0e9;
+  memweight += 2*sizeof(float)*weightsizemax/1.0e9;
+  OR_FATAL(cudaMemcpy(mapstream_d,map[0],sizeof(unsigned short)*mapdispl[0][buffdispl[0][numblocks]],cudaMemcpyHostToDevice));
+  OR_FATAL(cudaMemcpy(indstream_d,warpindex[0],sizeof(unsigned short)*warpdispl[0][buffdispl[0][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
+  OR_FATAL(cudaMemcpy(valstream_d,warpvalue[0],sizeof(float)*warpdispl[0][buffdispl[0][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
   #else
-  OR_FATAL(cudaMalloc((void**)&mapbuff_d,sizeof(MAPPREC)*mapsizemax));
-  OR_FATAL(cudaMalloc((void**)&indbuff_d,sizeof(INDPREC)*weightsizemax));
-  OR_FATAL(cudaMalloc((void**)&valbuff_d,sizeof(VALPREC)*weightsizemax));
-  memmap += sizeof(MAPPREC)*mapsizemax/1.0e9;
-  memweight += sizeof(INDPREC)*weightsizemax/1.0e9;
-  memweight += sizeof(VALPREC)*weightsizemax/1.0e9;
+  OR_FATAL(cudaMalloc((void**)&mapbuff_d,sizeof(unsigned short)*mapsizemax));
+  OR_FATAL(cudaMalloc((void**)&indbuff_d,sizeof(unsigned short)*weightsizemax));
+  OR_FATAL(cudaMalloc((void**)&valbuff_d,sizeof(float)*weightsizemax));
+  memmap += sizeof(unsigned short)*mapsizemax/1.0e9;
+  memweight += sizeof(unsigned short)*weightsizemax/1.0e9;
+  memweight += sizeof(float)*weightsizemax/1.0e9;
   #endif
   #endif
 
   double memfeat = 0.0;
   fprintf(stderr, "extbatch=%d, neuron=%d\n", extbatch, neuron);
   {
-    const size_t bytes = sizeof(FEATPREC) * size_t(extbatch) * size_t(neuron);
+    const size_t bytes = sizeof(float) * size_t(extbatch) * size_t(neuron);
     fflush(stdout);
     fprintf(stderr, "cudaMalloc %lu MB\n", bytes/1024/1024);
     if (cudaSuccess != cudaMalloc((void**)&currfeat_d,bytes)) {
@@ -276,7 +278,7 @@ void setup_gpu(){
     memfeat += bytes/1.0e9;
     OR_FATAL(cudaMemset(currfeat_d,0,bytes));
     OR_FATAL(cudaMemset(nextfeat_d,0,bytes));
-    OR_FATAL(cudaMemcpy(currfeat_d,currfeat,sizeof(FEATPREC)*mybatch*neuron,cudaMemcpyHostToDevice));
+    OR_FATAL(cudaMemcpy(currfeat_d,currfeat,sizeof(float)*mybatch*neuron,cudaMemcpyHostToDevice));
   }
 
   double memothers[numproc];
@@ -332,10 +334,10 @@ void infer_gpu(int l){
   #else
   OR_FATAL(cudaEventRecord(copystart,kernelstream));
   int weightsize = warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE;
-  OR_FATAL(cudaMemcpyAsync(indbuff_d,warpindex[l],sizeof(INDPREC)*weightsize,cudaMemcpyHostToDevice,kernelstream));
-  OR_FATAL(cudaMemcpyAsync(valbuff_d,warpvalue[l],sizeof(VALPREC)*weightsize,cudaMemcpyHostToDevice,kernelstream));
+  OR_FATAL(cudaMemcpyAsync(indbuff_d,warpindex[l],sizeof(unsigned short)*weightsize,cudaMemcpyHostToDevice,kernelstream));
+  OR_FATAL(cudaMemcpyAsync(valbuff_d,warpvalue[l],sizeof(float)*weightsize,cudaMemcpyHostToDevice,kernelstream));
   int mapsize = mapdispl[l][buffdispl[l][numblocks]];
-  OR_FATAL(cudaMemcpyAsync(mapbuff_d,map[l],sizeof(MAPPREC)*mapsize,cudaMemcpyHostToDevice,kernelstream));
+  OR_FATAL(cudaMemcpyAsync(mapbuff_d,map[l],sizeof(unsigned short)*mapsize,cudaMemcpyHostToDevice,kernelstream));
   OR_FATAL(cudaEventRecord(copystop,kernelstream));
   #endif
   #else
@@ -358,9 +360,9 @@ void infer_gpu(int l){
   #ifdef OUTOFCORE
   #ifdef OVERLAP
   if(l+1 < layer){
-    OR_FATAL(cudaMemcpyAsync(mapstream_d+((l+1)%2)*mapsizemax,map[l+1],sizeof(MAPPREC)*mapdispl[l+1][buffdispl[l+1][numblocks]],cudaMemcpyHostToDevice,copystream));
-    OR_FATAL(cudaMemcpyAsync(indstream_d+((l+1)%2)*weightsizemax,warpindex[l+1],sizeof(INDPREC)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
-    OR_FATAL(cudaMemcpyAsync(valstream_d+((l+1)%2)*weightsizemax,warpvalue[l+1],sizeof(VALPREC)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
+    OR_FATAL(cudaMemcpyAsync(mapstream_d+((l+1)%2)*mapsizemax,map[l+1],sizeof(unsigned short)*mapdispl[l+1][buffdispl[l+1][numblocks]],cudaMemcpyHostToDevice,copystream));
+    OR_FATAL(cudaMemcpyAsync(indstream_d+((l+1)%2)*weightsizemax,warpindex[l+1],sizeof(unsigned short)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
+    OR_FATAL(cudaMemcpyAsync(valstream_d+((l+1)%2)*weightsizemax,warpvalue[l+1],sizeof(float)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
   }
   #else
   OR_FATAL(cudaEventElapsedTime(&elapsedTime,copystart,copystop));
@@ -385,7 +387,7 @@ void infer_gpu(int l){
   OR_FATAL(cudaEventElapsedTime(&elapsedTime,kernelstart,kernelstop));
   timekernel += std::chrono::duration<float, std::milli>(elapsedTime);
 
-  FEATPREC *tempfeat_d = currfeat_d;
+  float *tempfeat_d = currfeat_d;
   currfeat_d = nextfeat_d;
   nextfeat_d = tempfeat_d;
 
@@ -398,9 +400,9 @@ void preproc(){
   buffdispl = new int*[layer];
   mapdispl = new int*[layer];
   warpdispl = new int*[layer];
-  map = new MAPPREC*[layer];
-  warpindex = new INDPREC*[layer];
-  warpvalue = new VALPREC*[layer];
+  map = new unsigned short*[layer];
+  warpindex = new unsigned short*[layer];
+  warpvalue = new float*[layer];
   int totbuff = 0;
   int totmapnz = 0;
   int totwarpnz = 0;
@@ -471,8 +473,8 @@ void preproc(){
     for(int warp = 0; warp < buffdispl[l][numblocks]*numwarp; warp++)
       warpdispl[l][warp+1] = warpdispl[l][warp]+warpnz[warp];
     totwarpnz += warpdispl[l][buffdispl[l][numblocks]*numwarp];
-    OR_FATAL(cudaMallocHost((void**)&warpindex[l],sizeof(INDPREC)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
-    OR_FATAL(cudaMallocHost((void**)&warpvalue[l],sizeof(VALPREC)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
+    OR_FATAL(cudaMallocHost((void**)&warpindex[l],sizeof(unsigned short)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
+    OR_FATAL(cudaMallocHost((void**)&warpvalue[l],sizeof(float)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
     #pragma omp parallel for
     for(int n = 0; n < warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE; n++){
       warpindex[l][n] = 0;
@@ -483,7 +485,7 @@ void preproc(){
     for(int buff = 0; buff < buffdispl[l][numblocks]; buff++)
       mapdispl[l][buff+1] = mapdispl[l][buff] + mapnz[buff];
     totmapnz += mapdispl[l][buffdispl[l][numblocks]];
-    OR_FATAL(cudaMallocHost((void**)&map[l],sizeof(MAPPREC)*mapdispl[l][buffdispl[l][numblocks]]));
+    OR_FATAL(cudaMallocHost((void**)&map[l],sizeof(unsigned short)*mapdispl[l][buffdispl[l][numblocks]]));
     #pragma omp parallel for
     for(int n = 0; n < buffdispl[l][numblocks]; n++)
       mapnz[n] = 0;
