@@ -63,10 +63,6 @@ float *nextfeat_d;
 int *active_d;
 int *categories_d;
 
-int numblocks;
-int numwarp;
-int buffsize;
-
 cudaStream_t copystream;
 cudaStream_t kernelstream;
 float elapsedTime;
@@ -103,18 +99,18 @@ __global__ void __launch_bounds__(1024,1) dummy_kernel(float *nextfeat, float *c
     
 };
 
-void setup_gpu() {
+void setup_gpu(int neuron, int layer, int myid, int mybatch, int extbatch, int numthreads) {
 
   OR_FATAL(cudaSetDevice(myid%6));
 
   OR_FATAL(cudaStreamCreate(&copystream));
   OR_FATAL(cudaStreamCreate(&kernelstream));
 
-  buffsize = BUFFER*1024/sizeof(float)/MINIBATCH;
-  numblocks = neuron/BLOCKSIZE;
-  numwarp = BLOCKSIZE/WARPSIZE;
+  int buffsize = BUFFER*1024/sizeof(float)/MINIBATCH;
+  int numblocks = neuron/BLOCKSIZE;
+  int numwarp = BLOCKSIZE/WARPSIZE;
 
-  preproc();
+  preproc(int neuron, int layer, int numthreads);
 
   double memother = 0.0;
   OR_FATAL(cudaMallocHost((void**)&globalcategories,sizeof(int)*mybatch));
@@ -309,7 +305,7 @@ void infer_gpu(int l) {
 };
 
 
-void preproc() {
+void preproc(int neuron, int layer, int numthreads, int numblocks, int numwarp, int buffsize, int **csrdispl, unsigned short **csrindex) {
   buffdispl = new int*[layer];
   mapdispl = new int*[layer];
   warpdispl = new int*[layer];

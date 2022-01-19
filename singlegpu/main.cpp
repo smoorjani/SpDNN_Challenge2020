@@ -1,41 +1,23 @@
 #include "vars.h"
 #include <cassert>
 #include <cstring>
+#include <string>
+#include <iostream>
+#include <fstream>
 
 
 #define MINIBATCH 12
 
-char *dataset;
-
-int neuron;
-int layer;
-int batch;
-int input;
-float bias;
-
-int **csrdispl;
-unsigned short **csrindex;
-float **csrvalue;
-
-float *currfeat;
 float *nextfeat;
 int *active;
 int *categories;
 int *globalcategories;
 
-int myid;
-int numproc;
-int numthreads;
-
-int *numbatch;
-int *batchdispl;
-int mybatch;
-int extbatch;
-
 int main(int argc, char **argv) {
 
-  myid = 0;
-  numproc = 1;
+  int myid = 0;
+  int numproc = 1;
+  int numthreads;
 
 #pragma omp parallel
   {
@@ -43,21 +25,15 @@ int main(int argc, char **argv) {
     numthreads = omp_get_num_threads();
   }
 
-  dataset = getenv("DATASET");
-  char *chartemp;
-  chartemp = getenv("NEURON");
-  neuron = atoi(chartemp);
-  chartemp = getenv("LAYER");
-  layer = atoi(chartemp);
-  chartemp = getenv("BATCH");
-  batch = atoi(chartemp);
-  chartemp = getenv("INPUT");
-  input = atoi(chartemp);
-  chartemp = getenv("BIAS");
-  bias = atof(chartemp);
+  std::string dataset(argv[1]);
+  int neuron = atoi(argv[2]);
+  int layer = atoi(argv[3]);
+  int batch = atoi(argv[4]);
+  int input = atoi(argv[5]);
+  int bias = atoi(argv[6]);
 
-  numbatch = new int[numproc];
-  batchdispl = new int[numproc + 1];
+  int *numbatch = new int[numproc];
+  int *batchdispl = new int[numproc + 1];
   int totbatch = batch / numproc * numproc;
   batchdispl[0] = 0;
   for (int p = 0; p < numproc; p++) {
@@ -68,20 +44,20 @@ int main(int argc, char **argv) {
     }
     batchdispl[p + 1] = batchdispl[p] + numbatch[p];
   }
-  mybatch = numbatch[myid];
-  extbatch = (mybatch + MINIBATCH - 1) / MINIBATCH * MINIBATCH;
+  int mybatch = numbatch[myid];
+  int extbatch = (mybatch + MINIBATCH - 1) / MINIBATCH * MINIBATCH;
 
-  csrdispl = new int *[layer];
-  csrindex = new unsigned short *[layer];
-  csrvalue = new float *[layer];
-  currfeat = new float[neuron * (long)mybatch];
-  nextfeat = new float[neuron * (long)mybatch];
+  int **csrdispl = new int *[layer];
+  unsigned short **csrindex = new unsigned short *[layer];
+  float **csrvalue = new float *[layer];
+  float *currfeat = new float[neuron * (long)mybatch];
+  float *nextfeat = new float[neuron * (long)mybatch];
 
-  fflush(0);
-  readinput();
-  fflush(0);
+  std::cout << std::flush;
+  readinput(dataset, neuron, input, batch, mybatch, numbatch);
+  std::cout << std::flush;
 
-  setup_gpu();
+  setup_gpu(neuron, layer, myid, mybatch, extbatch, numthreads);
 
   for (int l = 0; l < layer; l++)
     infer_gpu(l);
@@ -100,7 +76,7 @@ int main(int argc, char **argv) {
               mybatch * sizeof(*allcategories));
 }
 
-void readinput() {
+void readinput(std::string dataset, int neuron, int input, int batch, int mybatch, float *currfeat, int *numbatch) {
   char chartemp[500];
   float *tempfeat;
   if (myid == 0) {
