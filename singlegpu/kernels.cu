@@ -121,30 +121,28 @@ void setup_gpu() {
 
   preproc();
 
-  double memother = 0.0;
+  // what are all these datastructures?
   OR_FATAL(cudaMallocHost((void**)&globalcategories,sizeof(int)*mybatch));
   OR_FATAL(cudaMallocHost((void**)&categories,sizeof(int)*mybatch));
   OR_FATAL(cudaMallocHost((void**)&active,sizeof(int)*mybatch));
   OR_FATAL(cudaMalloc((void**)&active_d,sizeof(int)*extbatch));
   OR_FATAL(cudaMalloc((void**)&categories_d,sizeof(int)*extbatch));
-  memother += sizeof(int)*extbatch/1.0e9;
-  memother += sizeof(int)*extbatch/1.0e9;
+
   for (int k = 0; k < mybatch; k++) {
     active[k] = neuron;
     categories[k] = k;
     globalcategories[k] = batchdispl[myid]+k;
   }
+
   OR_FATAL(cudaMemset(active_d,0,sizeof(int)*extbatch));
   OR_FATAL(cudaMemset(categories_d,0,sizeof(int)*extbatch));
   OR_FATAL(cudaMemcpy(active_d,active,sizeof(int)*mybatch,cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(categories_d,categories,sizeof(int)*mybatch,cudaMemcpyHostToDevice));
 
-  double memweight = 0.0;
-  double memdispl = 0.0;
-  double memmap = 0.0;
   buffdispl_d = new int*[layer];
   mapdispl_d = new int*[layer];
   warpdispl_d = new int*[layer];
+
   #ifdef OUTOFCORE
   weightsizemax = 0;
   mapsizemax = 0;
@@ -153,16 +151,16 @@ void setup_gpu() {
   warpindex_d = new unsigned short*[layer];
   warpvalue_d = new float*[layer];
   #endif
+
   for (int l = 0; l < layer; l++) {
     OR_FATAL(cudaMalloc((void**)&buffdispl_d[l],sizeof(int)*(numblocks+1)));
     OR_FATAL(cudaMalloc((void**)&mapdispl_d[l],sizeof(int)*(buffdispl[l][numblocks]+1)));
     OR_FATAL(cudaMalloc((void**)&warpdispl_d[l],sizeof(int)*(buffdispl[l][numblocks]*numwarp+1)));
-    memdispl += sizeof(int)*(numblocks+1)/1.0e9;
-    memdispl += sizeof(int)*(buffdispl[l][numblocks]+1)/1.0e9;
-    memdispl += sizeof(int)*(buffdispl[l][numblocks]*numwarp+1)/1.0e9;
+
     OR_FATAL(cudaMemcpy(buffdispl_d[l],buffdispl[l],sizeof(int)*(numblocks+1),cudaMemcpyHostToDevice));
     OR_FATAL(cudaMemcpy(mapdispl_d[l],mapdispl[l],sizeof(int)*(buffdispl[l][numblocks]+1),cudaMemcpyHostToDevice));
     OR_FATAL(cudaMemcpy(warpdispl_d[l],warpdispl[l],sizeof(int)*(buffdispl[l][numblocks]*numwarp+1),cudaMemcpyHostToDevice));
+
     #ifdef OUTOFCORE
     int mapsize = mapdispl[l][buffdispl[l][numblocks]];
     if (mapsize > mapsizemax)
@@ -171,62 +169,44 @@ void setup_gpu() {
     if (weightsize > weightsizemax)
       weightsizemax = weightsize; 
     #else
+
     OR_FATAL(cudaMalloc((void**)&map_d[l],sizeof(unsigned short)*(mapdispl[l][buffdispl[l][numblocks]])));
     OR_FATAL(cudaMalloc((void**)&warpindex_d[l],sizeof(unsigned short)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
     OR_FATAL(cudaMalloc((void**)&warpvalue_d[l],sizeof(float)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
-    memmap += sizeof(unsigned short)*(mapdispl[l][buffdispl[l][numblocks]])/1.0e9;
-    memweight += sizeof(unsigned short)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE/1.0e9;
-    memweight += sizeof(float)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE/1.0e9;
+
     OR_FATAL(cudaMemcpy(map_d[l],map[l],sizeof(unsigned short)*(mapdispl[l][buffdispl[l][numblocks]]),cudaMemcpyHostToDevice));
     OR_FATAL(cudaMemcpy(warpindex_d[l],warpindex[l],sizeof(unsigned short)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
     OR_FATAL(cudaMemcpy(warpvalue_d[l],warpvalue[l],sizeof(float)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
     #endif
   }
+
   #ifdef OUTOFCORE
   #ifdef OVERLAP
   OR_FATAL(cudaMalloc((void**)&mapstream_d,sizeof(unsigned short)*mapsizemax*2));
   OR_FATAL(cudaMalloc((void**)&indstream_d,sizeof(unsigned short)*weightsizemax*2));
   OR_FATAL(cudaMalloc((void**)&valstream_d,sizeof(float)*weightsizemax*2));
-  memmap += 2*sizeof(unsigned short)*mapsizemax/1.0e9;
-  memweight += 2*sizeof(unsigned short)*weightsizemax/1.0e9;
-  memweight += 2*sizeof(float)*weightsizemax/1.0e9;
+
   OR_FATAL(cudaMemcpy(mapstream_d,map[0],sizeof(unsigned short)*mapdispl[0][buffdispl[0][numblocks]],cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(indstream_d,warpindex[0],sizeof(unsigned short)*warpdispl[0][buffdispl[0][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(valstream_d,warpvalue[0],sizeof(float)*warpdispl[0][buffdispl[0][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
+
   #else
+
   OR_FATAL(cudaMalloc((void**)&mapbuff_d,sizeof(unsigned short)*mapsizemax));
   OR_FATAL(cudaMalloc((void**)&indbuff_d,sizeof(unsigned short)*weightsizemax));
   OR_FATAL(cudaMalloc((void**)&valbuff_d,sizeof(float)*weightsizemax));
-  memmap += sizeof(unsigned short)*mapsizemax/1.0e9;
-  memweight += sizeof(unsigned short)*weightsizemax/1.0e9;
-  memweight += sizeof(float)*weightsizemax/1.0e9;
+
   #endif
   #endif
 
-  double memfeat = 0.0;
-  fprintf(stderr, "extbatch=%d, neuron=%d\n", extbatch, neuron);
-  {
-    const size_t bytes = sizeof(float) * size_t(extbatch) * size_t(neuron);
-    fflush(stdout);
-    fprintf(stderr, "cudaMalloc %lu MB\n", bytes/1024/1024);
-    if (cudaSuccess != cudaMalloc((void**)&currfeat_d,bytes)) {
-      fprintf(stderr, "ERROR: need more GPU memory\n");
-      exit(EXIT_FAILURE);
-    }
-    fprintf(stderr, "cudaMalloc %lu MB\n", bytes/1024/1024);
-    if (cudaSuccess != cudaMalloc((void**)&nextfeat_d,bytes)) {
-      fprintf(stderr, "ERROR: need more GPU memory\n");
-      exit(EXIT_FAILURE);
-    }
-    memfeat += bytes/1.0e9;
-    memfeat += bytes/1.0e9;
-    OR_FATAL(cudaMemset(currfeat_d,0,bytes));
-    OR_FATAL(cudaMemset(nextfeat_d,0,bytes));
-    OR_FATAL(cudaMemcpy(currfeat_d,currfeat,sizeof(float)*mybatch*neuron,cudaMemcpyHostToDevice));
-  }
+
+  OR_FATAL(cudaMemset(currfeat_d,0,bytes));
+  OR_FATAL(cudaMemset(nextfeat_d,0,bytes));
+  OR_FATAL(cudaMemcpy(currfeat_d,currfeat,sizeof(float)*mybatch*neuron,cudaMemcpyHostToDevice));
 }
 
 void preproc() {
+  // creating data structures
   buffdispl = new int*[layer];
   mapdispl = new int*[layer];
   warpdispl = new int*[layer];
@@ -270,14 +250,16 @@ void preproc() {
     for (int b = 0; b < numblocks; b++) {
       buffdispl[l][b+1] = buffdispl[l][b]+numbuff[b];
     }
-      
     totbuff += buffdispl[l][numblocks];
+
+    // setting warpnz structure to 0's
     int *warpnz = new int[buffdispl[l][numblocks]*numwarp];
     #pragma omp parallel for
     for (int n = 0; n < buffdispl[l][numblocks]*numwarp; n++) {
       warpnz[n] = 0;
     }
-      
+    
+    // setting mapnz structure to 0's
     int *mapnz = new int[buffdispl[l][numblocks]];
     #pragma omp parallel for
     for (int n = 0; n < buffdispl[l][numblocks]; n++) {
