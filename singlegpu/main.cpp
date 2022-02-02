@@ -2,7 +2,7 @@
 #include <cassert>
 #include <cstring>
 
-
+// QUESTION: minibatch is batch? (B, N, M)
 #define MINIBATCH 12
 
 int neuron;
@@ -65,10 +65,13 @@ int main(int argc, char **argv) {
   mybatch = numbatch[myid];
   extbatch = (mybatch + MINIBATCH - 1) / MINIBATCH * MINIBATCH;
 
+  // QUESTION: Matrix A
   csrdispl = new int *[layer];
   csrindex = new unsigned short *[layer];
   csrvalue = new float *[layer];
+  // QUESTION: Matrix B
   currfeat = new float[neuron * (long)mybatch];
+  // QUESTION: Matrix C
   nextfeat = new float[neuron * (long)mybatch];
 
   setup_gpu();

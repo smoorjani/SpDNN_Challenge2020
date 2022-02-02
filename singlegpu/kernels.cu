@@ -23,7 +23,6 @@ extern int *categories;
 extern int *globalcategories;
 
 extern int myid;
-extern int numproc;
 extern int numthreads;
 
 extern int *batchdispl;
@@ -44,9 +43,11 @@ unsigned short *mapbuff_d;
 unsigned short *indbuff_d;
 float *valbuff_d;;
 
+// QUESTION: can we always leave this on? what does it do?
 #ifdef OUTOFCORE
 int  weightsizemax;
 int  mapsizemax;
+// QUESTION: can we always leave this on? what does it do?
 #ifdef OVERLAP
 unsigned short *mapstream_d;
 unsigned short *indstream_d;
@@ -69,7 +70,6 @@ int buffsize;
 
 cudaStream_t copystream;
 cudaStream_t kernelstream;
-float elapsedTime;
 
 __device__ float __ReLU(float x) {
    return x<0.0?0.0:x>32.0?32.0:x;
@@ -84,6 +84,7 @@ __global__ void __launch_bounds__(1024,1) dummy_kernel(
   int wind = threadIdx.x%WARPSIZE;
   float reduce[MINIBATCH] = {0.0};
 
+  // QUESTION: is this moving the features into shared memory?
   for (int buff = buffdispl[blockIdx.x]; buff < buffdispl[blockIdx.x+1]; buff++) {
     int mapnz = mapdispl[buff+1]-mapdispl[buff];
     for (int n = threadIdx.x; n < mapnz; n += blockDim.x) {
@@ -102,6 +103,7 @@ __global__ void __launch_bounds__(1024,1) dummy_kernel(
     }
     __syncthreads();
   }
+  // QUESTION: what is this code responsible for?
   int m = blockIdx.x*blockDim.x+threadIdx.x;
   for (int f = 0; f < MINIBATCH; f++)
     if (nextfeat[(blockIdx.y*MINIBATCH+f)*neuron+m]=__ReLU(reduce[f]+bias))
@@ -121,12 +123,10 @@ void setup_gpu() {
 
   preproc();
 
-  // what are all these datastructures?
+  // QUESTION: what are all these datastructures? ignore for now
   OR_FATAL(cudaMallocHost((void**)&globalcategories,sizeof(int)*mybatch));
   OR_FATAL(cudaMallocHost((void**)&categories,sizeof(int)*mybatch));
   OR_FATAL(cudaMallocHost((void**)&active,sizeof(int)*mybatch));
-  OR_FATAL(cudaMalloc((void**)&active_d,sizeof(int)*extbatch));
-  OR_FATAL(cudaMalloc((void**)&categories_d,sizeof(int)*extbatch));
 
   for (int k = 0; k < mybatch; k++) {
     active[k] = neuron;
@@ -134,6 +134,9 @@ void setup_gpu() {
     globalcategories[k] = batchdispl[myid]+k;
   }
 
+  // move from host to device
+  OR_FATAL(cudaMalloc((void**)&active_d,sizeof(int)*extbatch));
+  OR_FATAL(cudaMalloc((void**)&categories_d,sizeof(int)*extbatch));
   OR_FATAL(cudaMemset(active_d,0,sizeof(int)*extbatch));
   OR_FATAL(cudaMemset(categories_d,0,sizeof(int)*extbatch));
   OR_FATAL(cudaMemcpy(active_d,active,sizeof(int)*mybatch,cudaMemcpyHostToDevice));
@@ -152,6 +155,8 @@ void setup_gpu() {
   warpvalue_d = new float*[layer];
   #endif
 
+  // preproc for each matrix - 
+  // QUESTION: we are only going to have 1 layer, how does this impact us?
   for (int l = 0; l < layer; l++) {
     OR_FATAL(cudaMalloc((void**)&buffdispl_d[l],sizeof(int)*(numblocks+1)));
     OR_FATAL(cudaMalloc((void**)&mapdispl_d[l],sizeof(int)*(buffdispl[l][numblocks]+1)));
@@ -198,13 +203,14 @@ void setup_gpu() {
 
   #endif
   #endif
-
-
+  
   OR_FATAL(cudaMemset(currfeat_d,0,bytes));
+  // QUESTION: do we need this?
   OR_FATAL(cudaMemset(nextfeat_d,0,bytes));
   OR_FATAL(cudaMemcpy(currfeat_d,currfeat,sizeof(float)*mybatch*neuron,cudaMemcpyHostToDevice));
 }
 
+// QUESTION: can we go through this function and understand all the loops
 void preproc() {
   // creating data structures
   buffdispl = new int*[layer];
@@ -214,9 +220,6 @@ void preproc() {
   warpindex = new unsigned short*[layer];
   warpvalue = new float*[layer];
 
-  int totbuff = 0;
-  int totmapnz = 0;
-  int totwarpnz = 0;
   int *temptag = new int[neuron*numthreads];
 
   for (int l = 0; l < layer; l++) {
@@ -250,7 +253,6 @@ void preproc() {
     for (int b = 0; b < numblocks; b++) {
       buffdispl[l][b+1] = buffdispl[l][b]+numbuff[b];
     }
-    totbuff += buffdispl[l][numblocks];
 
     // setting warpnz structure to 0's
     int *warpnz = new int[buffdispl[l][numblocks]*numwarp];
@@ -318,7 +320,6 @@ void preproc() {
       warpdispl[l][warp+1] = warpdispl[l][warp]+warpnz[warp];
     }
       
-    totwarpnz += warpdispl[l][buffdispl[l][numblocks]*numwarp];
     OR_FATAL(cudaMallocHost((void**)&warpindex[l],sizeof(unsigned short)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
     OR_FATAL(cudaMallocHost((void**)&warpvalue[l],sizeof(float)*warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE));
 
@@ -335,7 +336,6 @@ void preproc() {
       mapdispl[l][buff+1] = mapdispl[l][buff] + mapnz[buff];
     }
       
-    totmapnz += mapdispl[l][buffdispl[l][numblocks]];
     OR_FATAL(cudaMallocHost((void**)&map[l],sizeof(unsigned short)*mapdispl[l][buffdispl[l][numblocks]]));
 
     #pragma omp parallel for
@@ -467,6 +467,7 @@ void infer_gpu(int l) {
 
   OR_FATAL(cudaMemcpyAsync(categories_d,categories,sizeof(int)*feature,cudaMemcpyHostToDevice,kernelstream));
 
+  // swap curr with next
   float *tempfeat_d = currfeat_d;
   currfeat_d = nextfeat_d;
   nextfeat_d = tempfeat_d;
