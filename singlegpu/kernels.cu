@@ -52,20 +52,22 @@
 
 cudaStream_t copystream;
 cudaStream_t kernelstream;
-float elapsedTime;
 
 __device__ float __ReLU(float x) {
    return x<0.0?0.0:x>32.0?32.0:x;
 };
 
-__global__ void __launch_bounds__(1024,1) dummy_kernel(float *nextfeat, float *currfeat, int buffsize, int *buffdispl,
-                                                      int *mapdispl, unsigned short *map, int *displ, unsigned short *index,
-                                                      float *value, float bias, int neuron, int *categories, int *active) {
+__global__ void __launch_bounds__(1024,1) dummy_kernel(
+  float *nextfeat, float *currfeat, int buffsize, int *buffdispl, int *mapdispl,
+  unsigned short *map, int *displ, unsigned short *index, float *value, float bias,
+  int neuron, int *categories, int *active) 
+{
   extern __shared__ float shared[];
   int wind = threadIdx.x%WARPSIZE;
   float reduce[MINIBATCH] = {0.0};
 
   // COALESCING/moving
+  // QUESTION: is this moving the features into shared memory?
   for (int buff = buffdispl[blockIdx.x]; buff < buffdispl[blockIdx.x+1]; buff++) {
     int mapnz = mapdispl[buff+1]-mapdispl[buff];
     for (int n = threadIdx.x; n < mapnz; n += blockDim.x) {
@@ -75,6 +77,7 @@ __global__ void __launch_bounds__(1024,1) dummy_kernel(float *nextfeat, float *c
     }
     __syncthreads();
     // MATRIX MULTIPLICATION
+    // stage irregular access through shared memory
     int warp = (buff*blockDim.x+threadIdx.x)/WARPSIZE;
     for (int m = displ[warp]; m < displ[warp+1]; m++) {
       int ind = index[m*WARPSIZE+wind];
@@ -84,11 +87,11 @@ __global__ void __launch_bounds__(1024,1) dummy_kernel(float *nextfeat, float *c
     }
     __syncthreads();
   }
+  // QUESTION: what is this code responsible for?
   int m = blockIdx.x*blockDim.x+threadIdx.x;
   for (int f = 0; f < MINIBATCH; f++)
     if (nextfeat[(blockIdx.y*MINIBATCH+f)*neuron+m]=__ReLU(reduce[f]+bias))
       atomicAdd(active+blockIdx.y*MINIBATCH+f,1);
-    
 };
 
 void setup_gpu(int neuron, int myid, int mybatch, int numproc, int extbatch, int numthreads,
@@ -110,33 +113,32 @@ void setup_gpu(int neuron, int myid, int mybatch, int numproc, int extbatch, int
   preproc(neuron, numthreads, numblocks, numwarp, buffsize, csrdispl, csrindex,
     *buffdispl, *mapdispl, *warpdispl, *map, *warpindex, *warpvalue);
 
-  double memother = 0.0;
+  OR_FATAL(cudaMallocHost((void**)&globalcategories,sizeof(int)*mybatch));
+  OR_FATAL(cudaMallocHost((void**)&categories,sizeof(int)*mybatch));
+  OR_FATAL(cudaMallocHost((void**)&active,sizeof(int)*mybatch));
 
   // KEEPS TRACK OF THE NONZERO FEATURES- GRAPH CHALLENGE ONLY. CAN REMOVE FOR INTEGRATION PURPOSES
   /**
     TODO can we get rid of all of this... just like that?
   */
 
-  // OR_FATAL(cudaMallocHost((void**)&globalcategories,sizeof(int)*mybatch));
-  // OR_FATAL(cudaMallocHost((void**)&categories,sizeof(int)*mybatch));
+  OR_FATAL(cudaMallocHost((void**)&globalcategories,sizeof(int)*mybatch));
+  OR_FATAL(cudaMallocHost((void**)&categories,sizeof(int)*mybatch));
   OR_FATAL(cudaMallocHost((void**)&active,sizeof(int)*mybatch));
   OR_FATAL(cudaMalloc((void**)&active_d,sizeof(int)*extbatch));
-  // OR_FATAL(cudaMalloc((void**)&categories_d,sizeof(int)*extbatch));
+  OR_FATAL(cudaMalloc((void**)&categories_d,sizeof(int)*extbatch));
   // memother += sizeof(int)*extbatch/1.0e9;
   // memother += sizeof(int)*extbatch/1.0e9;
-  // for (int k = 0; k < mybatch; k++) {
-  //   active[k] = neuron;
-  //   categories[k] = k;
-  //   globalcategories[k] = batchdispl[myid]+k;
-  // }
-  // OR_FATAL(cudaMemset(active_d,0,sizeof(int)*extbatch));
-  // OR_FATAL(cudaMemset(categories_d,0,sizeof(int)*extbatch));
-  // OR_FATAL(cudaMemcpy(active_d,active,sizeof(int)*mybatch,cudaMemcpyHostToDevice));
-  // OR_FATAL(cudaMemcpy(categories_d,categories,sizeof(int)*mybatch,cudaMemcpyHostToDevice));
+  for (int k = 0; k < mybatch; k++) {
+    active[k] = neuron;
+    categories[k] = k;
+    globalcategories[k] = batchdispl[myid]+k;
+  }
+  OR_FATAL(cudaMemset(active_d,0,sizeof(int)*extbatch));
+  OR_FATAL(cudaMemset(categories_d,0,sizeof(int)*extbatch));
+  OR_FATAL(cudaMemcpy(active_d,active,sizeof(int)*mybatch,cudaMemcpyHostToDevice));
+  OR_FATAL(cudaMemcpy(categories_d,categories,sizeof(int)*mybatch,cudaMemcpyHostToDevice));
 
-  double memweight = 0.0;
-  double memdispl = 0.0;
-  double memmap = 0.0;
   // buffdispl_d = new int*[layer];
   // mapdispl_d = new int*[layer];
   // warpdispl_d = new int*[layer];
@@ -191,9 +193,6 @@ void setup_gpu(int neuron, int myid, int mybatch, int numproc, int extbatch, int
   OR_FATAL(cudaMalloc((void**) &buffdispl_d, sizeof(int) * (numblocks + 1)));
   OR_FATAL(cudaMalloc((void**) &mapdispl_d, sizeof(int) * (buffdispl[numblocks] + 1)));
   OR_FATAL(cudaMalloc((void**) &warpdispl_d, sizeof(int) * (buffdispl[numblocks] * numwarp + 1)));
-  memdispl += sizeof(int) * (numblocks + 1) / 1.0e9;
-  memdispl += sizeof(int) * (buffdispl[numblocks] + 1) / 1.0e9;
-  memdispl += sizeof(int) * (buffdispl[numblocks] * numwarp + 1) / 1.0e9;
   OR_FATAL(cudaMemcpy(buffdispl_d, buffdispl, sizeof(int) * (numblocks + 1), cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(mapdispl_d, mapdispl, sizeof(int) * (buffdispl[numblocks] + 1), cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(warpdispl_d, warpdispl, sizeof(int) * (buffdispl[numblocks] + 1), cudaMemcpyHostToDevice));
@@ -201,9 +200,7 @@ void setup_gpu(int neuron, int myid, int mybatch, int numproc, int extbatch, int
   OR_FATAL(cudaMalloc((void**) &map_d, sizeof(unsigned short) * mapdispl[buffdispl[numblocks] * numwarp] * WARPSIZE));
   OR_FATAL(cudaMalloc((void**) &warpindex_d, sizeof(unsigned short) * warpdispl[buffdispl[numblocks] * numwarp] * WARPSIZE));
   OR_FATAL(cudaMalloc((void**) &warpvalue_d, sizeof(float) * warpdispl[buffdispl[numblocks] * WARPSIZE));
-  memmap += sizeof(unsigned short) * (mapdispl[buffdispl[numblocks]]) / 1.0e9;
-  memweight += sizeof(unsigned short) * warpdisl[buffdispl[numblocks] * numwarp] * WARPSIZE / 1.0e9;
-  memweight += sizeof(float) * warpdispl[buffdispl[numblocks] * numwarp] * WARPSIZE / 1.0e9;
+
   OR_FATAL(cudaMemcpy(map_d, map, sizeof(unsigned short) * (mapdispl[buffdispl[numblocks]]), cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(warpindex_d, warpindex, sizeof(unsigned short) * warpdispl[buffdispl[numblocks] * numwarp] * WARPSIZE, cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(warpvalue_d, warpvalue, sizeof(float) * warpdispl[buffdispl[numblocks] * numwarp] * WARPSIZE, cudaMemcpyHostToDevice));
@@ -228,42 +225,9 @@ void setup_gpu(int neuron, int myid, int mybatch, int numproc, int extbatch, int
   // #endif
   // #endif
 
-  double memfeat = 0.0;
-  fprintf(stderr, "extbatch=%d, neuron=%d\n", extbatch, neuron);
-  {
-    const size_t bytes = sizeof(float) * size_t(extbatch) * size_t(neuron);
-    fflush(stdout);
-    fprintf(stderr, "cudaMalloc %lu MB\n", bytes/1024/1024);
-    if (cudaSuccess != cudaMalloc((void**)&currfeat_d,bytes)) {
-      fprintf(stderr, "ERROR: need more GPU memory\n");
-      exit(EXIT_FAILURE);
-    }
-    fprintf(stderr, "cudaMalloc %lu MB\n", bytes/1024/1024);
-    if (cudaSuccess != cudaMalloc((void**)&nextfeat_d,bytes)) {
-      fprintf(stderr, "ERROR: need more GPU memory\n");
-      exit(EXIT_FAILURE);
-    }
-    memfeat += bytes/1.0e9;
-    memfeat += bytes/1.0e9;
-    OR_FATAL(cudaMemset(currfeat_d,0,bytes));
-    OR_FATAL(cudaMemset(nextfeat_d,0,bytes));
-    OR_FATAL(cudaMemcpy(currfeat_d,currfeat,sizeof(float)*mybatch*neuron,cudaMemcpyHostToDevice));
-  }
-
-  /**
-    TODO what are these doing??
-  */
-  // double memothers[numproc];
-  // double memweights[numproc];
-  // double memdispls[numproc];
-  // double memmaps[numproc];
-  // double memfeats[numproc];
-
-  // memothers[0] = memother;
-  // memweights[0] = memweight;
-  // memdispls[0] = memdispl;
-  // memmaps[0] = memmap;
-  // memfeats[0] = memfeat;
+  OR_FATAL(cudaMemset(currfeat_d,0,bytes));
+  OR_FATAL(cudaMemset(nextfeat_d,0,bytes));
+  OR_FATAL(cudaMemcpy(currfeat_d,currfeat,sizeof(float)*mybatch*neuron,cudaMemcpyHostToDevice));
 }
 
 
@@ -360,9 +324,6 @@ void preproc(int neuron, int numthreads, int numblocks, int numwarp, int buffsiz
   warpindex = new unsigned short*;
   warpvalue = new float*;
 
-  int totbuff = 0;
-  int totmapnz = 0;
-  int totwarpnz = 0;
   int *temptag = new int[neuron*numthreads];
 
   int *numbuff = new int[numblocks];
@@ -396,13 +357,14 @@ void preproc(int neuron, int numthreads, int numblocks, int numwarp, int buffsiz
     buffdispl[b+1] = buffdispl[b]+numbuff[b];
   }
     
-  totbuff += buffdispl[numblocks];
+  // setting warpnz structures to 0's
   int *warpnz = new int[buffdispl[numblocks]*numwarp];
   #pragma omp parallel for
   for (int n = 0; n < buffdispl[numblocks]*numwarp; n++) {
     warpnz[n] = 0;
   }
     
+  // setting mapnz structures to 0's
   int *mapnz = new int[buffdispl[numblocks]];
   #pragma omp parallel for
   for (int n = 0; n < buffdispl[numblocks]; n++) {
@@ -461,7 +423,6 @@ void preproc(int neuron, int numthreads, int numblocks, int numwarp, int buffsiz
     warpdispl[warp+1] = warpdispl[warp]+warpnz[warp];
   }
     
-  totwarpnz += warpdispl[buffdispl[numblocks]*numwarp];
   OR_FATAL(cudaMallocHost((void**)&warpindex,sizeof(unsigned short)*warpdispl[buffdispl[numblocks]*numwarp]*WARPSIZE));
   OR_FATAL(cudaMallocHost((void**)&warpvalue,sizeof(float)*warpdispl[buffdispl[numblocks]*numwarp]*WARPSIZE));
 
@@ -538,4 +499,79 @@ void preproc(int neuron, int numthreads, int numblocks, int numwarp, int buffsiz
   delete[] csrdispl;
   delete[] csrindex;
   delete[] csrvalue;
+};
+
+/* 
+Simultaneously launch the kernel and copy weights for the next layer.
+
+Two streams: kernelStream and copyStream.
+kernelStream contains the kernel, as well as the associated memset, and bookkeeping operations
+copyStream just has the copy operations for the next layer
+
+use copyStart / copyStop events to time the stream, and start/stop events to time the kernel
+
+*/
+void infer_gpu(int l) {
+
+/* if OUTOFCORE and OVERLAP, point at the right part of the double-buffer to get the weights from the previous iteration
+  if OUTOFCORE and !OVERLAP, copy arguments into the kernel
+  otherwise, just get the right layer pointers
+*/
+  #ifdef OUTOFCORE
+  #ifdef OVERLAP
+  mapbuff_d = mapstream_d+(l%2)*mapsizemax;
+  indbuff_d = indstream_d+(l%2)*weightsizemax;
+  valbuff_d = valstream_d+(l%2)*weightsizemax;
+  OR_FATAL(cudaStreamSynchronize(copystream));
+  #else
+  int weightsize = warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE;
+  OR_FATAL(cudaMemcpyAsync(indbuff_d,warpindex[l],sizeof(unsigned short)*weightsize,cudaMemcpyHostToDevice,kernelstream));
+  OR_FATAL(cudaMemcpyAsync(valbuff_d,warpvalue[l],sizeof(float)*weightsize,cudaMemcpyHostToDevice,kernelstream));
+
+  int mapsize = mapdispl[l][buffdispl[l][numblocks]];
+  OR_FATAL(cudaMemcpyAsync(mapbuff_d,map[l],sizeof(unsigned short)*mapsize,cudaMemcpyHostToDevice,kernelstream));
+  #endif
+  #else
+  mapbuff_d = map_d[l];
+  indbuff_d = warpindex_d[l];
+  valbuff_d = warpvalue_d[l];
+  #endif
+
+  dim3 block(BLOCKSIZE);
+  dim3 grid(numblocks,(mybatch+MINIBATCH-1)/MINIBATCH);
+
+  // initialize active features in the batch
+  OR_FATAL(cudaMemsetAsync(active_d,0,sizeof(int)*mybatch,kernelstream));
+  dummy_kernel<<<grid,block,sizeof(float)*buffsize*MINIBATCH,kernelstream>>>(nextfeat_d,currfeat_d,buffsize,buffdispl_d[l],mapdispl_d[l],mapbuff_d,warpdispl_d[l],indbuff_d,valbuff_d,bias,neuron,categories_d,active_d);
+  OR_FATAL(cudaMemcpyAsync(active,active_d,sizeof(int)*mybatch,cudaMemcpyDeviceToHost,kernelstream));
+
+  #ifdef OUTOFCORE
+  #ifdef OVERLAP
+  if (l+1 < layer) {
+    OR_FATAL(cudaMemcpyAsync(mapstream_d+((l+1)%2)*mapsizemax,map[l+1],sizeof(unsigned short)*mapdispl[l+1][buffdispl[l+1][numblocks]],cudaMemcpyHostToDevice,copystream));
+    OR_FATAL(cudaMemcpyAsync(indstream_d+((l+1)%2)*weightsizemax,warpindex[l+1],sizeof(unsigned short)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
+    OR_FATAL(cudaMemcpyAsync(valstream_d+((l+1)%2)*weightsizemax,warpvalue[l+1],sizeof(float)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
+  }
+  #else
+  #endif
+  #endif
+
+  OR_FATAL(cudaStreamSynchronize(kernelstream));
+
+  int feature = 0;
+  for (int k = 0; k < mybatch; k++) {
+    if (active[k]) {
+      globalcategories[feature] = globalcategories[k];
+      categories[feature] = k;
+      feature++;
+    }
+  }
+  mybatch = feature;
+
+  OR_FATAL(cudaMemcpyAsync(categories_d,categories,sizeof(int)*feature,cudaMemcpyHostToDevice,kernelstream));
+
+  // swap curr with next
+  float *tempfeat_d = currfeat_d;
+  currfeat_d = nextfeat_d;
+  nextfeat_d = tempfeat_d;
 };
