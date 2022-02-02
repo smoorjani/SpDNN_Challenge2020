@@ -8,10 +8,8 @@
 
 #define MINIBATCH 12
 
-float *nextfeat;
-int *active;
-int *categories;
-int *globalcategories;
+// int *categories;
+// int *globalcategories;
 
 int main(int argc, char **argv) {
 
@@ -27,7 +25,7 @@ int main(int argc, char **argv) {
 
   std::string dataset(argv[1]);
   int neuron = atoi(argv[2]);
-  int layer = atoi(argv[3]);
+  // int layer = atoi(argv[3]);
   int batch = atoi(argv[4]);
   int input = atoi(argv[5]);
   int bias = atoi(argv[6]);
@@ -47,9 +45,10 @@ int main(int argc, char **argv) {
   int mybatch = numbatch[myid];
   int extbatch = (mybatch + MINIBATCH - 1) / MINIBATCH * MINIBATCH;
 
-  int **csrdispl = new int *[layer];
-  unsigned short **csrindex = new unsigned short *[layer];
-  float **csrvalue = new float *[layer];
+  int *csrdispl = new int*;
+  unsigned short *csrindex = new unsigned short*;
+  float *csrvalue = new float*;
+
   float *currfeat = new float[neuron * (long)mybatch];
   float *nextfeat = new float[neuron * (long)mybatch];
 
@@ -57,10 +56,34 @@ int main(int argc, char **argv) {
   readinput(dataset, neuron, input, batch, mybatch, numbatch);
   std::cout << std::flush;
 
-  setup_gpu(neuron, layer, myid, mybatch, extbatch, numthreads);
+  // setting up GPU- moving global variables to execution-only local context
+  int *buffdispl;
+  int *mapdispl;
+  int *warpdispl;
+  unsigned short *map;
+  unsigned short *warpindex;
+  float *warpvalue;
 
-  for (int l = 0; l < layer; l++)
-    infer_gpu(l);
+  int *buffdispl_d;
+  int *mapdispl_d;
+  int *warpdispl_d;
+
+  unsigned short *map_d;
+  unsigned short *warpindex_d;
+  float *warpvalue_d;
+
+  float *currfeat_d;
+  float *nextfeat_d;
+  int *active;
+  int *active_d;
+
+  setup_gpu(neuron, myid, mybatch, numproc, extbatch, numthreads, csrdispl, csrindex,
+            csrvalue, batchdispl, buffdispl, mapdispl, warpdispl, map, warpindex, warpvalue,
+            buffdispl_d, mapdispl_d, warpdispl_d, map_d, warpindex_d, warpvalue_d,
+            currfeat, nextfeat, currfeat_d, nextfeat_d);
+
+  infer_gpu(map_d, warpindex_d, warpvalue_d, mybatch, active, active_d, nextfeat_d, currfeat_d,
+            buffdispl_d, mapdispl_d, warpdispl_d, bias, neuron, active_d);
 
   int batches[numproc];
   batches[myid] = mybatch;
