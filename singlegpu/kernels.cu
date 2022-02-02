@@ -34,17 +34,6 @@
 // unsigned short *indbuff_d;
 // float *valbuff_d;
 
-// #ifdef OUTOFCORE
-// int  weightsizemax;
-// int  mapsizemax;
-// #ifdef OVERLAP
-// unsigned short *mapstream_d;
-// unsigned short *indstream_d;
-// float *valstream_d;
-// #endif
-// #else
-// #endif
-
 // float *currfeat_d;
 // float *nextfeat_d;
 // int *active_d;
@@ -127,8 +116,7 @@ void setup_gpu(int neuron, int myid, int mybatch, int numproc, int extbatch, int
   OR_FATAL(cudaMallocHost((void**)&active,sizeof(int)*mybatch));
   OR_FATAL(cudaMalloc((void**)&active_d,sizeof(int)*extbatch));
   OR_FATAL(cudaMalloc((void**)&categories_d,sizeof(int)*extbatch));
-  // memother += sizeof(int)*extbatch/1.0e9;
-  // memother += sizeof(int)*extbatch/1.0e9;
+
   for (int k = 0; k < mybatch; k++) {
     active[k] = neuron;
     categories[k] = k;
@@ -204,26 +192,6 @@ void setup_gpu(int neuron, int myid, int mybatch, int numproc, int extbatch, int
   OR_FATAL(cudaMemcpy(map_d, map, sizeof(unsigned short) * (mapdispl[buffdispl[numblocks]]), cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(warpindex_d, warpindex, sizeof(unsigned short) * warpdispl[buffdispl[numblocks] * numwarp] * WARPSIZE, cudaMemcpyHostToDevice));
   OR_FATAL(cudaMemcpy(warpvalue_d, warpvalue, sizeof(float) * warpdispl[buffdispl[numblocks] * numwarp] * WARPSIZE, cudaMemcpyHostToDevice));
-  // #ifdef OUTOFCORE
-  // #ifdef OVERLAP
-  // OR_FATAL(cudaMalloc((void**)&mapstream_d,sizeof(unsigned short)*mapsizemax*2));
-  // OR_FATAL(cudaMalloc((void**)&indstream_d,sizeof(unsigned short)*weightsizemax*2));
-  // OR_FATAL(cudaMalloc((void**)&valstream_d,sizeof(float)*weightsizemax*2));
-  // memmap += 2*sizeof(unsigned short)*mapsizemax/1.0e9;
-  // memweight += 2*sizeof(unsigned short)*weightsizemax/1.0e9;
-  // memweight += 2*sizeof(float)*weightsizemax/1.0e9;
-  // OR_FATAL(cudaMemcpy(mapstream_d,map[0],sizeof(unsigned short)*mapdispl[0][buffdispl[0][numblocks]],cudaMemcpyHostToDevice));
-  // OR_FATAL(cudaMemcpy(indstream_d,warpindex[0],sizeof(unsigned short)*warpdispl[0][buffdispl[0][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
-  // OR_FATAL(cudaMemcpy(valstream_d,warpvalue[0],sizeof(float)*warpdispl[0][buffdispl[0][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice));
-  // #else
-  // OR_FATAL(cudaMalloc((void**)&mapbuff_d,sizeof(unsigned short)*mapsizemax));
-  // OR_FATAL(cudaMalloc((void**)&indbuff_d,sizeof(unsigned short)*weightsizemax));
-  // OR_FATAL(cudaMalloc((void**)&valbuff_d,sizeof(float)*weightsizemax));
-  // memmap += sizeof(unsigned short)*mapsizemax/1.0e9;
-  // memweight += sizeof(unsigned short)*weightsizemax/1.0e9;
-  // memweight += sizeof(float)*weightsizemax/1.0e9;
-  // #endif
-  // #endif
 
   OR_FATAL(cudaMemset(currfeat_d,0,bytes));
   OR_FATAL(cudaMemset(nextfeat_d,0,bytes));
@@ -250,25 +218,6 @@ void infer_gpu(unsigned short *map_d, unsigned short *warpindex_d, float *warpva
   if OUTOFCORE and !OVERLAP, copy arguments into the kernel
   otherwise, just get the right layer pointers
 */
-  // #ifdef OUTOFCORE
-  // #ifdef OVERLAP
-  // mapbuff_d = mapstream_d+(l%2)*mapsizemax;
-  // indbuff_d = indstream_d+(l%2)*weightsizemax;
-  // valbuff_d = valstream_d+(l%2)*weightsizemax;
-  // OR_FATAL(cudaStreamSynchronize(copystream));
-  // #else
-  // int weightsize = warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE;
-  // OR_FATAL(cudaMemcpyAsync(indbuff_d,warpindex[l],sizeof(unsigned short)*weightsize,cudaMemcpyHostToDevice,kernelstream));
-  // OR_FATAL(cudaMemcpyAsync(valbuff_d,warpvalue[l],sizeof(float)*weightsize,cudaMemcpyHostToDevice,kernelstream));
-
-  // int mapsize = mapdispl[l][buffdispl[l][numblocks]];
-  // OR_FATAL(cudaMemcpyAsync(mapbuff_d,map[l],sizeof(unsigned short)*mapsize,cudaMemcpyHostToDevice,kernelstream));
-  // #endif
-  // #else
-  // mapbuff_d = map_d;
-  // indbuff_d = warpindex_d;
-  // valbuff_d = warpvalue_d;
-  // #endif
 
   int numblocks = neuron/BLOCKSIZE;
   int buffsize = BUFFER*1024/sizeof(float)/MINIBATCH;
@@ -280,17 +229,6 @@ void infer_gpu(unsigned short *map_d, unsigned short *warpindex_d, float *warpva
   OR_FATAL(cudaMemsetAsync(active_d, 0, sizeof(int) * mybatch, kernelstream));
   dummy_kernel<<<grid, block, sizeof(float) * buffsize * MINIBATCH, kernelstream>>>(nextfeat_d, currfeat_d, buffsize, buffdispl_d, mapdispl_d, map_d, warpdispl_d, warpindex_d, warpvalue_d, bias, neuron, categories_d, active_d);
   OR_FATAL(cudaMemcpyAsync(active, active_d, sizeof(int)*mybatch, cudaMemcpyDeviceToHost, kernelstream));
-
-  // #ifdef OUTOFCORE
-  // #ifdef OVERLAP
-  // if (l+1 < layer) {
-  //   OR_FATAL(cudaMemcpyAsync(mapstream_d+((l+1)%2)*mapsizemax,map[l+1],sizeof(unsigned short)*mapdispl[l+1][buffdispl[l+1][numblocks]],cudaMemcpyHostToDevice,copystream));
-  //   OR_FATAL(cudaMemcpyAsync(indstream_d+((l+1)%2)*weightsizemax,warpindex[l+1],sizeof(unsigned short)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
-  //   OR_FATAL(cudaMemcpyAsync(valstream_d+((l+1)%2)*weightsizemax,warpvalue[l+1],sizeof(float)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
-  // }
-  // #else
-  // #endif
-  // #endif
 
   OR_FATAL(cudaStreamSynchronize(kernelstream));
 
@@ -499,79 +437,4 @@ void preproc(int neuron, int numthreads, int numblocks, int numwarp, int buffsiz
   delete[] csrdispl;
   delete[] csrindex;
   delete[] csrvalue;
-};
-
-/* 
-Simultaneously launch the kernel and copy weights for the next layer.
-
-Two streams: kernelStream and copyStream.
-kernelStream contains the kernel, as well as the associated memset, and bookkeeping operations
-copyStream just has the copy operations for the next layer
-
-use copyStart / copyStop events to time the stream, and start/stop events to time the kernel
-
-*/
-void infer_gpu(int l) {
-
-/* if OUTOFCORE and OVERLAP, point at the right part of the double-buffer to get the weights from the previous iteration
-  if OUTOFCORE and !OVERLAP, copy arguments into the kernel
-  otherwise, just get the right layer pointers
-*/
-  #ifdef OUTOFCORE
-  #ifdef OVERLAP
-  mapbuff_d = mapstream_d+(l%2)*mapsizemax;
-  indbuff_d = indstream_d+(l%2)*weightsizemax;
-  valbuff_d = valstream_d+(l%2)*weightsizemax;
-  OR_FATAL(cudaStreamSynchronize(copystream));
-  #else
-  int weightsize = warpdispl[l][buffdispl[l][numblocks]*numwarp]*WARPSIZE;
-  OR_FATAL(cudaMemcpyAsync(indbuff_d,warpindex[l],sizeof(unsigned short)*weightsize,cudaMemcpyHostToDevice,kernelstream));
-  OR_FATAL(cudaMemcpyAsync(valbuff_d,warpvalue[l],sizeof(float)*weightsize,cudaMemcpyHostToDevice,kernelstream));
-
-  int mapsize = mapdispl[l][buffdispl[l][numblocks]];
-  OR_FATAL(cudaMemcpyAsync(mapbuff_d,map[l],sizeof(unsigned short)*mapsize,cudaMemcpyHostToDevice,kernelstream));
-  #endif
-  #else
-  mapbuff_d = map_d[l];
-  indbuff_d = warpindex_d[l];
-  valbuff_d = warpvalue_d[l];
-  #endif
-
-  dim3 block(BLOCKSIZE);
-  dim3 grid(numblocks,(mybatch+MINIBATCH-1)/MINIBATCH);
-
-  // initialize active features in the batch
-  OR_FATAL(cudaMemsetAsync(active_d,0,sizeof(int)*mybatch,kernelstream));
-  dummy_kernel<<<grid,block,sizeof(float)*buffsize*MINIBATCH,kernelstream>>>(nextfeat_d,currfeat_d,buffsize,buffdispl_d[l],mapdispl_d[l],mapbuff_d,warpdispl_d[l],indbuff_d,valbuff_d,bias,neuron,categories_d,active_d);
-  OR_FATAL(cudaMemcpyAsync(active,active_d,sizeof(int)*mybatch,cudaMemcpyDeviceToHost,kernelstream));
-
-  #ifdef OUTOFCORE
-  #ifdef OVERLAP
-  if (l+1 < layer) {
-    OR_FATAL(cudaMemcpyAsync(mapstream_d+((l+1)%2)*mapsizemax,map[l+1],sizeof(unsigned short)*mapdispl[l+1][buffdispl[l+1][numblocks]],cudaMemcpyHostToDevice,copystream));
-    OR_FATAL(cudaMemcpyAsync(indstream_d+((l+1)%2)*weightsizemax,warpindex[l+1],sizeof(unsigned short)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
-    OR_FATAL(cudaMemcpyAsync(valstream_d+((l+1)%2)*weightsizemax,warpvalue[l+1],sizeof(float)*warpdispl[l+1][buffdispl[l+1][numblocks]*numwarp]*WARPSIZE,cudaMemcpyHostToDevice,copystream));
-  }
-  #else
-  #endif
-  #endif
-
-  OR_FATAL(cudaStreamSynchronize(kernelstream));
-
-  int feature = 0;
-  for (int k = 0; k < mybatch; k++) {
-    if (active[k]) {
-      globalcategories[feature] = globalcategories[k];
-      categories[feature] = k;
-      feature++;
-    }
-  }
-  mybatch = feature;
-
-  OR_FATAL(cudaMemcpyAsync(categories_d,categories,sizeof(int)*feature,cudaMemcpyHostToDevice,kernelstream));
-
-  // swap curr with next
-  float *tempfeat_d = currfeat_d;
-  currfeat_d = nextfeat_d;
-  nextfeat_d = tempfeat_d;
 };
